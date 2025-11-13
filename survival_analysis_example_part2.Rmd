@@ -1,0 +1,124 @@
+---
+title: "Survival Analysis in R - Part 2"
+output: html_notebook
+---
+
+Source: https://www.emilyzabor.com/survival-analysis-in-r.html
+
+```{r}
+library(knitr)
+library(dplyr)
+library(survival)
+library(ggplot2)
+library(tibble)
+library(lubridate)
+library(ggsurvfit)
+library(tidycmprsk)
+library(gtsummary)
+
+
+ezfun::set_ccf_palette("contrast")
+```
+# Part 2: Landmark Analysis and Time Dependent Covariates
+
+1. Recap of Part 1: using log-rank tests and Cox regression to examine associations between covariates of interest and survival outcomes. 
+a. These analyses rely on the covariate being measured at **baseline** (i.e. before follow-up time for the event begins).
+b. Part 2: what happens if you are interested in a covariate that is measured *after* follow-up time begins?
+  
+  2. **Example**: 
+  a. Overall survival is measured from treatment start. 
+b. Goal: find the association between complete response to treatment and survival. 
+c. Why traditional methods such as log-rank test or Cox regression are biased in favor of responders in this scenario (Anderson et al, 1983):
+  - **Landmark Approach**:
+  - $H_0$: the survival from landmark does not depend on response status at landmark. 
+d. Some other possible covariates of interest in cancer research that may not be measured at baseline include:
+  - Transplant failure
+- Graft vs Host disease
+- Second resection
+- Adjuvant therapy
+- Compliance
+- Adverse event
+
+
+## The `BMT` Dataset
+1. This section uses the `BMT` dataset from {SemiCompRisks} package as an example dataset. 
+  a. The data consist of 137 bone marrow transplant patients. 
+  b. Variables of Interest:
+    - `T1`: time in days to death or last follow-up.
+    - `delta1`: death indicator; 1 = Dead, 0 = Alive.
+    - `TA`: time in days to acute graft-versus-host disease.
+    - `deltaA`: acute graft-versus-host disease indicator; 1 = developed acute graft-versus-host disease, 0 = never developed acute graft-versus-host disease. 
+
+```{r}
+data(BMT, package = "SemiCompRisks")
+
+head(BMT[, c("T1", "delta1", "TA", "deltaA")])
+```
+
+
+## Landmark Approach
+1. General Steps:
+  a. Step 1: select a fixed time after baseline as your **landmark time**.
+    - Note: this should be done based on clinical information, prior to data inspection. 
+  b. Step 2: subset population for those followed at least until landmark time. 
+    - Note: always report the number excluded due to the event of interest or censoring prior to the landmark time. 
+  c. Step 3: calculate follow-up from landmark time and apply traditional log-rank tests or Cox regression. 
+  
+2. `BMT` Data Example
+
+  a. Interest: association between acute graft versus host disease (aGVHD) and survival. 
+  b. Problem: aGVHD is assessed after the transplant (baseline and also the start of follow up time). 
+  c. Analysis:
+    - Step 1: select landmark time.
+      - Typically aGVHD occurs within the first 90 days following transplant, so we use a **90-day** landmark. 
+    - Step 2: subset ppulation for those followed at least until landmark time. 
+    
+```{r}
+lm_dat <- BMT %>% 
+  filter(T1 >= 90)
+
+# Number of patients excluded:
+nrow(BMT) - nrow(lm_dat)
+```
+      - 15 patients were excluded as they were either dead or not followed until the landmark time of 90 days. 
+  
+    - Step 3: calculate follow-up time from landmark and apply traditional methods. 
+    
+```{r}
+lm_dat <-
+  lm_dat %>% 
+  mutate(
+    lm_T1 = T1 - 90
+  )
+```
+
+      - Fit survival curve using traditional methods: Kaplan-Meier estimator of survival probability. 
+```{r}
+survfit2(Surv(lm_T1, delta1) ~ deltaA, data = lm_dat) %>% 
+  ggsurvfit() + 
+  labs(
+    x = "Days from 90-Day Landmark",
+    y = "Overall Survival Probability"
+  ) + 
+  add_risktable()
+
+```
+ 
+      - In Cox regression you can use the `subset` option in `coxph` to exclude those patient who were not followed through the landmark time. 
+      
+```{r}
+coxph(
+  Surv(T1, delta1) ~ deltaA,
+  subset = T1 >= 90,
+  data = BMT
+) %>% 
+  tbl_regression(exp = TRUE)
+```
+
+## Time-dependent Covariate Approach
+
+1. **Time-dependent covariate approach** is an alternative to a landmark analysis, which incorporates time-dependent covariates. 
+  a. Time-dependent covariate approach is more appropraite than landmark analysis when:
+    - The value of covariate is changing over time.
+    - There is not an obvious landmark time. 
+    - Use of a landmark would lead to many exclusions. 

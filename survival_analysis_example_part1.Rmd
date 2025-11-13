@@ -1,5 +1,5 @@
 ---
-title: "Survival Analysis in R"
+title: "Survival Analysis in R - Part 1"
 output: html_notebook
 ---
 
@@ -425,6 +425,3 @@ coxph(Surv(time, status) ~ sex, data = lung) %>%
 ```
     - The HR = 0.59 implies that 0.59 times as many females are dying as males, at any given time. Thus, females have a significantly lower hazard of death than males in these data. 
 
-
-# Part 2: Landmark Analysis and Time Dependent Covariates
-  
