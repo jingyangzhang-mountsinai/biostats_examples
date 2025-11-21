@@ -67,7 +67,7 @@ head(BMT[, c("T1", "delta1", "TA", "deltaA")])
    c. Analysis:
       i. Step 1: select landmark time.
           - Typically aGVHD occurs within the first 90 days following transplant, so we use a **90-day** landmark. 
-      ii. Step 2: subset ppulation for those followed at least until landmark time.
+      ii. Step 2: subset population for those followed at least until landmark time.
           - 15 patients were excluded as they were either dead or not followed until the landmark time of 90 days. 
 ```{r}
 lm_dat <- BMT %>% 
@@ -111,10 +111,10 @@ coxph(
 ## Time-dependent Covariate Approach
 
 1. **Time-dependent covariate approach** is an alternative to a landmark analysis, which incorporates time-dependent covariates. 
-  a. Time-dependent covariate approach is more appropraite than landmark analysis when:
+  a. Time-dependent covariate approach is more appropriate than landmark analysis when:
     - The value of covariate is changing over time.
     - There is not an obvious landmark time. 
-    - Use of a landmark would lead to many exclusions. 
+    - Use of a landmark would lead too many exclusions. 
 
   b. **Counting Process Format**: the special format required for analysis of time-dependent covariates.
   
@@ -140,7 +140,27 @@ td_dat <-
 ```
 
     - Original data of the first 5 individual patients.
-    ![](images/bmt_original5.png)
-    ![](images/survival_data_timeline.png)
+![](images/bmt_original5.png)
     - Counting process format data of the same 5 individual patients. 
-    ![](images/bmt_countingprocessformat5.png)
+![](images/bmt_countingprocessformat5.png)
+      - We can see that patients 1 and 4 now have multiple rows of data because they both developed aGVHD at some point in time after baseline. 
+    - Analyze this time-dependent covariate as usual using Cox regression with `coxph` and an alteration to our use of `Surv` to include arguments to both `time` and `time2`:
+    
+```{r}
+coxph(
+  Surv(time = tstart, time2 = tstop, event = death) ~ agvhd,
+  data = td_dat
+) %>% 
+  tbl_regression(exp = TRUE)
+```
+      - The result indicates that acute graft vs. host disease is not significantly associated with death using either landmark analysis or a time-dependent covariates. 
+
+
+## Summary
+
+1. Often one will want to use landmark analysis for visualization of a single covariate. 
+
+2. One will use Cox regression with a time-dependent covariate for univariate and multivariate modeling. 
+
+    
+  

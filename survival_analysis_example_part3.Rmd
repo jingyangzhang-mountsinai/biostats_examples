@@ -1,0 +1,205 @@
+---
+title: "Survival Analysis in R - Part 3"
+output: html_notebook
+---
+
+Source: https://www.emilyzabor.com/survival-analysis-in-r.html
+
+```{r}
+library(knitr)
+library(dplyr)
+library(survival)
+library(ggplot2)
+library(tibble)
+library(lubridate)
+library(ggsurvfit)
+library(tidycmprsk)
+library(gtsummary)
+
+
+ezfun::set_ccf_palette("contrast")
+```
+# Part 3 Competing Risks
+
+1. Competing risks analyses may be used when subjects have multiple possible events in a time-to-event setting. 
+
+  a. Examples:
+    1) Recurrence.
+    2) Death from disease.
+    3) Death from other causes.
+    4) Treatment response.
+  
+  b. All or some of these examples (among others) may be possible events in any given study. 
+
+2. Fundamental Problem in Competing Risks: unobserved dependence among the various event times. 
+  a. Example: patients who recur are more likely to die, and therefore times to recurrence and times to death would NOT be independent events. 
+
+3. Two Approaches in Competing Risks Analyses:
+  a. **Cause-Specific Hazard of a Given Event**: represents the rate per unit of time of the event among those not having failed from other events. 
+    1) When the events are independent (almost never true), cause-specific hazards is **unbiased**. 
+    2) When the events are dependent, a variety of results can be obtained depending on the setting. 
+    3) Cause-specific hazards is preferred when: the goal is to establish that a covariate is indeed acting on the event of interest, cause-specific hazards may be preferred for treatment or prognostic marker effect testing. 
+    4) Obtain the cause-specific hazard of a given event is done by:
+      a) Defining the event of interest as an event.
+      b) Defining any competing events as censored at the date of the competing event. 
+  
+  b. **Subdistribution Hazard of a Given Event**: represents the rate per unit time of the event as well as the influencing of competing events. 
+    1) Cumulative incidence using 1 - Kaplan Meier Estimate always $\geq$ Cumulative incidence using competing risk methods.
+      a) Using Kaplan-Meier estimate when there is competing risks $\rightarrow$ overestimate of the cumulative incidence. 
+        i. The amount of overestimation depends on event rates and dependence among events. 
+    2) Subdistribution hazards is preferred when: the goal is to establish overall benefit, subdistribtution hazards may be preferred for buidling prognostic nomograms or considering health economic effects to get a better sense of the influence of treatment and other covariates on an absolute scale. 
+  
+4. Each of the two approaches may only illustrate one important aspect of the data while possibly obscuring others.
+  a. Thus, the chosen approach should depend on the question of interest. 
+  
+
+## Subdistribution Hazards:
+
+1. R package for competing risk analysis: {tidycmprsk}.
+
+2. Example: The `Melanoma` Dataset
+  a. `Melanoma` data comes from the {MASS} package. 
+  b. `Melanoma` contains variables:
+    1) `time`: survival time in days, possibly censored.
+    2) `status`: 1 died from melanoma, 2 alive, 3 dead from other causes. 
+    3) `sex`: 1 = male, 0 = female.
+    4) `age`: age in years.
+    5) `year`: year of operation. 
+    6) `thickness`: tumor thickness in mm.
+    7) `ulcer`: 1 = presence, 0 = absence.
+  
+
+```{r}
+data(Melanoma, package = "MASS")
+head(Melanoma)
+```
+
+The `status` variable in these data are coded in a non-standard way. We will recode the variable so that we have: status = 0 is alive, status = 1 is died from melanoma, status = 2 is died from other causes. 
+
+```{r}
+Melanoma <- Melanoma %>% mutate(
+  status = as.factor(recode(status, `2` = 0, `1` = 1, `3` = 2))
+)
+
+head(Melanoma)
+```
+
+### Cumulative Incidence for Competing Risks
+
+1. Nonparametric Estimate of the Cumulative Incidence of the Event of Interest: at any point in time, the sum of the cumulative incidence of each event is equal to the total cumulative incidence of any event (not true in the cause-specific setting).
+
+2. Gray's test is a modified Chi-squared test used to compare 2 or more groups.
+
+3. Estimate the cumulative incidence in the context of competing risks using the `cuminc` function from the {tidycmprsk} package. 
+
+  a. By default, the status variable has to be a factor with censored patients coded as 0. 
+  
+```{r}
+# Surv() ~ 1: means no grouping variable so the function will compute the overall cumulative incidence functions for each event type in the dataset, not separated by treatment or groups. ## ~1 produce CIF curves for the entire sample (one group).
+## Analogous to survfit(Surv(time, status) ~ 1): gives one Kaplan-Meier curve for everyone. 
+## Surv() ~ treatment: separate cumulative incidence curves for each event type within each treatment group. 
+### Conduct Gray's test for comparing CIFs between groups. 
+### This is used when you want to compare cumulative incidence between groups. 
+cuminc(Surv(time, status) ~ 1, data = Melanoma)
+```
+
+4. Use the `ggcumnin()` function from the {ggsurvfit} package to plot the cumulative incidence.
+  a. By default, it plots the first event type only. 
+  b. The following plot shows the cumulative incidence of death from melanoma (status = 1: death from melanoma).
+```{r}
+cuminc(Surv(time, status) ~ 1, data = Melanoma) %>% 
+  ggcuminc() +
+  labs(
+    x = "Days"
+  ) + 
+  add_confidence_interval() +
+  add_risktable()
+```
+
+  c. If you want to include both event types, specify the outcomes in the `ggcuminc(outcome =)` argument:
+```{r}
+cuminc(Surv(time, status) ~ 1, data = Melanoma) %>% 
+  # Ask to include both event 1 (death from melanoma) and 2 (death from other causes).
+  ggcuminc(outcome = c("1", "2")) + 
+  ylim(c(0, 1)) +
+  labs(
+    x = "Days"
+  )
+```
+  
+5. Analyze death from melanoma or other causes in the Melanoma data, according to the presence or absence of ulceration. 
+  a. We can estimate the cumulative incidence at various times by group and display that in a table using the `tbl_cuminc()` function from the {tidycmprsk} package.
+  b. Gray's test can be added to test for a difference between groups over the entire follow up period using the `add_p()` function. 
+```{r}
+cuminc(Surv(time, status) ~ ulcer, data = Melanoma) %>% 
+  tbl_cuminc(
+    times = 1826.25, # Number of days in 5 years.
+    label_header = "**{time / 365.25}-year cuminc"
+  )
+```
+
+
+  c. Plot death due to melanoma according to ulceration status using `ggcuminc()` from the {ggsurvfit} package. 
+```{r}
+cuminc(Surv(time, status) ~ ulcer, data = Melanoma) %>% 
+  ggcuminc() + 
+  labs(
+    x = "Days"
+  ) + 
+  add_confidence_interval() + 
+  add_risktable()
+```
+### Competing Risks Regression
+  
+  
+1. Two Approaches to Competing Risks Regression:
+  a. Cause-specific Hazards:
+    1) Instantaneous rate of occurence of the given type of event in subjects who are currently event-free.
+    2) Estimated using Cox regression (`coxph` function).
+  
+  b. Subdistribution Hazards:
+    1) Instantaneous rate of occurence of the given type of event in subjects who have not yet experienced an event of that type. 
+    2) Estimated using Fine-Gray regression (`crr` function).
+
+
+2. **Example 1 - Subdistribution Hazards**: Finding out the effect of age and sex on death from melanoma, with death from other causes as a competing event. 
+  a. The `crr()` function from the {tidycmprsk} package will estimate the subdistribution hazards. 
+  
+```{r}
+crr(Surv(time, status) ~ sex + age, data = Melanoma)
+
+## Coef: log hazard ratio
+## HR: exp(Coef) is the hazard ratio. 
+```
+
+  b. Generate tables of formatted results using the `tbl_regression()` function from the {gt_summary} package.
+    1) The option `exp = TRUE` allows you to obtain the hazard ratio estimates. 
+
+```{r}
+crr(Surv(time, status) ~ sex + age, data = Melanoma) %>% 
+  tbl_regression(exp = TRUE)
+```
+
+  c. Male sex (1 = male, 0 = female) is significantly associated with increased hazard of death due to melanoma (p-value = 0.03).
+  d. Age was NOT significantly associated with death due to melanoma (p-value = 0.2).
+
+
+3. **Example 2 - Cause-specific Hazards**: Finding out the effect of age and sex on death from melanoma, with death from other causes as a competing event.   
+
+  a. If we use the cause-specific hazards regression approach, we first need to censor all subjects who did NOT have the event of interest (i.e. death from melanoma). Then use the `coxph` as before. 
+  
+    1) Patients who died from other causes are now censored for the cause-specific hazard approach to competing risk. 
+    
+```{r}
+coxph(
+  Surv(time, ifelse(status == 1, 1, 0)) ~ age + sex, data = Melanoma 
+    
+) %>% 
+  tbl_regression(exp = TRUE)
+```
+  b. Male sex (1 = male, 0 = female) is significantly associated with increased hazard of death due to melanoma (p-value = 0.025).
+  c. Age was NOT significantly associated with death due to melanoma (p-value = 0.056).
+
+
+  
+    
