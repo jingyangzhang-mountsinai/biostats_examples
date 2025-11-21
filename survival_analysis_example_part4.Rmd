@@ -1,0 +1,190 @@
+---
+title: "Survival Analysis in R - Part 4"
+output: html_notebook
+---
+
+Source: https://www.emilyzabor.com/survival-analysis-in-r.html
+
+```{r}
+library(knitr)
+library(dplyr)
+library(survival)
+library(tibble)
+library(lubridate)
+library(ggsurvfit)
+library(tidycmprsk)
+library(gtsummary)
+
+
+ezfun::set_ccf_palette("contrast")
+```
+
+# Part 3 Advanced Topics
+
+1. Summary of Previous Topics:
+  a. The basics of survival analysis including the **Kaplan-Meier survival function** and **Cox regression**.
+  b. **Landmark analysis** and **time-dependent covariates**.
+  c. **Cumulative incidence and regression for competing risks analyses**.
+
+
+2. This section covers:
+  a. Assessing the proportional hazards assumption.
+  b. Making a smooth survival plot based on x-year survival according to a continuous covariate.
+  c. Conditional survival. 
+
+
+## Assessing Proportional Hazards
+
+1. One assumption of the Cox proportional hazards regression is that the hazards are **proportional at each point in time** throughout follow up.
+
+2. The `cox.zph()` function from the {survival} package allows us to check this assumption. It results in two main things:
+  a. A hypothesis test of whether the effect of each covariate differs according to time, and a global test of all covariates at once. 
+    1) This is done by testing for an interaction effect between the covariate and log(time).
+    2) A significant p-value indicates that the proportional hazards assumption is violated. 
+  
+  b. Plots of the Schoenfeld residuals. 
+    1) Deviation from a zero-slope line is evidence that the proportional hazards assumption is violated. 
+    
+```{r}
+my_fit <- coxph(Surv(time, status) ~ sex + age, data = lung)
+
+cz <- cox.zph(my_fit)
+print(cz)
+```
+
+```{r}
+plot(cz)
+```
+
+    
+  c. Here we see that both covariates sex and age have p-value > 0.05, we fail to reject the null hypothesis, and conclude that the proportional hazards assumption is satisfied for each individual covariate, and also for the model overall. 
+  
+
+
+## Smooth Survival Plot
+
+1. Sometimes you may want to visualize a survival estimate according to a continuous variable.   a. The `sm.survival` function from the {sm} package allows you to do this for a quantile of the distribution of survival data. 
+  b. The default quantile is `p = 0.5` for median interval. 
+
+
+2. Example: The `lung` Dataset
+
+  a. Example Data: the `lung` dataset from the {survival} package. 
+  b. The data contain subjects with advanced lung cancer from the North Central Cancer Treatment Group. 
+  c. Relevant Variables:
+    - time: observed survival time in days.
+    - status: censoring status.
+      - censored = 1
+      - dead = 2
+    - sex: 
+      - male = 1
+      - female = 2
+  d. Because the status is coded in a non-standard way in this dataset, we recode it to event = 1 and censored = 0.
+    - The `Surv` function in the {survival} package accepts the following coding of status by default:
+      - TRUE/FALSE: TRUE = event; FALSE = censored
+      - 1/0: 1 = event; 0 = censored
+      - 2/1: 2 = event; 1 = censored
+```{r}
+lung <- lung %>% mutate(
+  status = recode(status, `1` = 0, `2` = 1)
+)
+```
+
+```{r}
+library(sm)
+sm.options(
+  list(
+    xlab = "Age (years)",
+    ylab = "Median time to death (years)"
+    )
+)
+
+
+sm.survival(
+  x = lung$age,
+  y = lung$time,
+  status = lung$status,
+  h = sd(lung$age) / nrow(lung)^(-1/4)
+)
+```
+  e. Interpretations:
+    1) The x's represent events.
+    2) The o's represent censoring.
+    3) The line is a smoothed estimate of median survival according to age.
+      a) In this case, it is too smooth.
+  
+  f. The option `h` is the smoothing parameter. 
+    1) It should be related to the standard deviation of the continuous covariate, x. 
+    2) Suggested to start with $\frac{sd(x)}{n^{-\frac{1}{4}}}$, then reduced by $\frac{1}{2}$, $\frac{1}{4}$, etc. to get a good amount of smoothing. 
+  g. Reduce the smooth by 1/6.
+```{r}
+sm.survival(
+  x = lung$age,
+  y = lung$time,
+  status = lung$status,
+  h = (1/6) * sd(lung$age) / nrow(lung)^(-1/4)
+)
+```
+    1) Now we can see that median time to death decreases slightly as age increases. 
+    
+    
+
+## Conditional Survival
+
+1. Sometimes it is of interest to general survival estiamtes among a group of patients woh have already survived for some length of time: 
+
+$S(y|x) = \frac{S(x+y)}{S(x)}$
+
+  a. $y$: number of additional survival years of interest. 
+  b. $x$: number of years a patient has already survived. 
+
+2. The estimates are implemented in the {condsurv} package.
+  a. We can use the `conditional_surv_est()` function from the {condsurv} package to get estimates and 95% confidence intervals. 
+
+
+
+  b. Example: condition on survival to 6 months.
+```{r}
+library(condsurv)
+
+fit1 <- survfit(Surv(time, status) ~ 1, data = lung)
+
+## This seq() generated 1 year = 365.25, 18 months = 365.25 + 182.625 = 547.875, and 24 months = 182.625 * 4
+prob_times <- seq(365.25, 182.625 * 4, 182.625)
+
+purrr::map_df(
+  prob_times,
+  ## conditional_surv_est gives the estimated survival prob of surviving to time t2 conditioned on already having survived to t1. S(t2|t1) = S(t1 + t2)/S(t1)
+  ~conditional_surv_est(
+    basekm = fit1,
+    t1 = 182.625, # days in 6 months.
+    t2 = .x
+  )
+) %>% 
+  mutate(months = round(prob_times / 30.4)) %>% 
+  select(months, everything()) %>% 
+  kable
+```
+
+Estimated 1-year survival:probability is approximately 40.9%.
+```{r}
+summary(survfit(Surv(time, status) ~ 1, data = lung), times = 365.25)
+```
+  
+    1) The unconditional 1-year survival estiamted probability is 40.9% 
+    3) Interpretation:
+      a) Among patients who have already survived 6 months (182.625 days), the probability of being alive at 12 months (6 months later) is 58%.
+      b) Among patients who have already survived 6 months, the probability of being alive at 18 months (a further 12 months) is 36%.
+      c) Among patients who have already survived 6 months, the probability of being alive at 24 months (a further 18 months) is 16%.
+   
+3. Visualize conditional survival data based on different lengths of time survived using the `condKMggplot()` function from the {condsurv} package:
+
+```{r}
+gg_conditional_surv(
+  basekm = fit1,
+  at = prob_times,
+  main = "Conditional survival in lung data",
+  xlab = "Days"
+) + 
+  labs(color = "Conditional time")
+```

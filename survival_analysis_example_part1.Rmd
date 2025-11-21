@@ -273,7 +273,16 @@ survfit2(Surv(time, status) ~ 1, data = lung) %>%
     - Use `summary()` function with the `times` argument.
     - Because the `time` variable in the `lung` data is in days, we need to use argument `times = 365.25` (i.e. days in 1 year).
 ```{r}
-summary(survfit(Surv(time, status) ~ 1, data = lung), times = 365.25)
+est_surv_1yr <- summary(survfit(Surv(time, status) ~ 1, data = lung), times = 365.25)
+
+survfit2(Surv(time, status) ~ 1, data = lung) %>% 
+  ggsurvfit() + 
+  labs(
+    x = "Days",
+    y = "Overall Survival Probability"
+  ) + 
+  geom_vline(xintercept = 365, color = "red", linetype = "dashed") + 
+  geom_hline(yintercept = est_surv_1yr$surv, color = "red", linetype = "dashed")
 ```
   - The 1-year probability of survival in this study is estimated to be 40.9%.
     - The 1-year survival probability is the point on the y-axis that corresponds to 1 year on the x-axis for the survival curve. 
