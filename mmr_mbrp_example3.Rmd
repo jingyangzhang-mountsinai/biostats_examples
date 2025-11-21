@@ -1,0 +1,315 @@
+---
+title: "mmr_mrbp_example3"
+author: "Jingyang Zhang"
+date: "2025-11-21"
+output: html_document
+---
+
+
+Load libraries and set seed.
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(partykit)
+library(caret)
+library(survival)
+library(glmnet)
+library(rsample)
+library(skimr)
+library(Hmisc)
+library(ggparty)
+library(emmeans)
+library(knitr)
+
+library(survival)
+library(survminer)
+library(dplyr)
+library(tidyr)
+library(emmeans)
+library(ggplot2)
+library(patchwork)
+library(here)
+source(here("mmr_helpers.R"))
+
+```
+
+
+
+```{r}
+mmr_complete <- read_csv(here("data/", "mmr_dat_imputed_cr.csv"))
+
+
+mmr_complete <- mmr_complete %>% select(-first_mace_day, -mace, -died, -death_day, -last_day_known_alive_in_study)
+
+
+```
+
+
+Functions
+```{r}
+## Option 2: Cox Proportional Hazard Model
+
+cox_fit <- function(y, x, start = NULL, weights = NULL, offset = NULL, ...){
+  # y is a survival object.
+  # x is treatment. 
+  #browser()
+  df <- data.frame(time =  y[,1], event = y[,2], trt = x[,2])
+  coxph(formula = Surv(time, event) ~ 0 + ., 
+        data = df, 
+        robust=TRUE)
+  #coxph(formula = Surv(time, event) ~  ., data = df)
+}
+
+cox_interaction <- function(data, treatment, group_col, time_col, event_col){
+
+  # 1. Define the Cox model formula with treatment and cluster (found by MBRP) interactions dynamically
+  cox_formula <- as.formula(paste0(
+    ## Setting event == 1 explicitly define the event of interest happens when event variables = 1 instead of 0, NA, 2 (when there is competing event).
+    "Surv(", time_col, ", ", event_col, " == 1) ~ ", treatment, "*", group_col
+  ))
+  
+  # 2. Fit the Cox proportional hazards model
+  cox_model_inter <- coxph(cox_formula, data = data)
+  
+  # 3. Compute estimated marginal means (EMMs) with pairwise comparisons.
+  ## a. Get pairwise comparisons of hazard ratios (HR) from a Cox model (i.e. cox_model_inter).
+  ### 1) as.formula(paste0('revpairwise ~ ', treatment, ' | ', group_col) tells emmeans to compute pairwise comparisons of treatment levels separately for each cluster. 
+  ### 2) emmeans returns a list-like object: emmeans[[1]] is estimated marginal means of treatment levels within each cluster and emmeans[[2]] is constrasts between treatment levels within each cluster. 
+  ## b. Converts results to a data frame. 
+  ## c. Orders comparisons by the estimated log-HR.
+  ## d. Creates fake "strata" numbers for plotting.
+  ## e. Calculates HR by exponentiate log-HR.
+  ## f. Creates a text label ("HR = X, P = Y") for each comparison. 
+  
+  
+  em_inter <- emmeans(cox_model_inter, as.formula(paste0('revpairwise ~ ', treatment, ' | ', group_col)), 
+                adjusted = 'none')[[2]] %>% 
+    as.data.frame() %>%
+    arrange(estimate) %>%  # Arrange by Predicted values/cluster
+    mutate(
+      strata = 2 * row_number() - 1,
+      HR = exp(estimate),
+      label = paste0("HR=", round(HR, 2), ", P=", round(p.value, 3))
+    )
+
+  
+  # Get all unique clusters
+  clusters <- em_inter[[group_col]] %>% unique() %>% as.vector()
+  
+  mx_t<-max(data[[time_col]])
+  # Loop through clusters and generate plots
+  plots <- map(clusters, function(cluster_i) {
+    #browser()
+    # Subset data for this cluster
+    data_i <- data %>% filter(.data[[group_col]] == cluster_i)
+    em_i<-em_inter %>% filter(.data[[group_col]]==cluster_i)
+    
+    # Fit Cox model
+    cox_formula <- as.formula(paste0(
+      "Surv(", time_col, ", ", event_col, " == 1) ~ ", treatment
+    ))
+    cox_model <- coxph(cox_formula, data = data_i)
+  
+    # Create newdata for survival predictions
+    newdata <- expand_grid(treatment_val = unique(data_i[[treatment]])) %>%
+      arrange(treatment_val)
+    #browser()
+    names(newdata)[names(newdata) == "treatment_val"] <- treatment
+    
+    # Predict survival
+    surv_fit <- survfit(cox_model, newdata)
+    
+    # Plot survival curves
+    ps <- ggsurvplot(
+      fit = surv_fit,
+      data = newdata,
+      palette = as.vector(ann.colors[[treatment]]),
+      pval = FALSE,
+      conf.int = TRUE
+    )
+    
+    # Annotate with HR labels and facet by predicted group
+    ps_surv <- ps$plot +
+      geom_text( aes(x=0, y = 1, label = em_i$label), size = 3, hjust=-0.1) +
+      labs(title = paste("Cluster:", cluster_i)) +
+      theme(legend.position = "none")
+    
+    return(ps_surv)
+  })
+  
+  # Show all plots (in RStudio or similar)
+  combined_plot <- wrap_plots(plots, nrow=1) +
+    plot_annotation(title = "Survival Curves by Cluster",
+                    theme = theme(plot.title = element_text(size = 14, face = "bold")))
+}
+
+
+cox_interaction2 <- function(data, treatment, group_col, time_col, event_col){
+  
+  # Get all unique clusters
+  clusters <- levels(data[[group_col]])
+  mx_t<-max(data[[time_col]])
+  # Loop through clusters and generate plots
+  plots <- map(clusters, function(cluster_i) {
+    
+    # Subset data for this cluster
+    data_i <- data %>% filter(.data[[group_col]] == cluster_i)
+    
+    # Fit Cox model
+    cox_formula <- as.formula(paste0(
+      "Surv(", time_col, ", ", event_col, " == 1) ~ ", treatment
+    ))
+    cox_model <- coxph(cox_formula, data = data_i)
+    
+    # Compute emmeans
+    em <- emmeans(cox_model, as.formula(paste0("revpairwise ~ ", treatment)), 
+                  adjusted = "none")[[2]] %>%
+      as.data.frame() %>%
+      #arrange(.data[[group_col]]) %>%
+      mutate(
+        strata = 2 * row_number() - 1,
+        HR = exp(estimate),
+        label = paste0("HR=", round(HR, 2), ", P=", round(p.value, 3))
+      )
+    
+    # Create newdata for survival predictions
+    newdata <- expand_grid(treatment_val = unique(data_i[[treatment]])) %>%
+      arrange(treatment_val)
+  
+    names(newdata)[names(newdata) == "treatment_val"] <- treatment
+    
+    # Predict survival
+    surv_fit <- survfit(cox_model, newdata)
+    
+    # Plot survival curves
+    ps <- ggsurvplot(
+      fit = surv_fit,
+      data = newdata,
+      palette = as.vector(ann.colors[[treatment]]),
+      pval = FALSE,
+      conf.int = TRUE
+    )
+    
+    # Annotate with HR labels and facet by predicted group
+    ps_surv <- ps$plot +
+      geom_text( aes(x=mx_t/5, y = 1, label = em$label), size = 3, hjust=-0.1) +
+      labs(title = paste("Cluster:", cluster_i)) +
+      theme(legend.position = "none")
+    
+    return(ps_surv)
+  })
+  
+  # Show all plots (in RStudio or similar)
+  combined_plot <- wrap_plots(plots, nrow=1) +
+    plot_annotation(title = "Survival Curves by Cluster",
+                    theme = theme(plot.title = element_text(size = 14, face = "bold")))
+}
+
+```
+
+
+# Data management
+
+Convert categorical and binary variables into factors. 
+
+```{r data management message=FALSE, warning=FALSE}
+#mmr_complete <- read_csv("data/results/mmr_dat_imputed.csv") 
+max_unique_for_factor <- 5
+mmr_complete <- convert_to_factor(mmr_complete, 
+                                  max_unique = max_unique_for_factor)
+mmr_complete<-mutate(mmr_complete,
+                     nyha0=as.numeric(nyha0),
+                     ccsc0=as.numeric(ccsc0),
+                     last_day=740,
+                     time_1y=if_else(time <= 365,time,365),
+                     event_1y=if_else(time<=365,event,"0"),
+                     time_2y=if_else(time<=last_day,time,last_day),
+                     event_2y=if_else(time<=last_day,event,"0"))
+mmr_complete <- mmr_complete %>% mutate(
+  event_1y = as.numeric(event_1y),
+  event_2y = as.numeric(event_2y)
+)
+mmr_complete %>%
+  # Select factor columns.
+  select(where(is.factor)) %>%   
+  # Compute proportions of factor levels and find the minimum.
+  map_dbl(~ min(table(.) / length(.))) %>% 
+  # Sort these min proportions and save it to min_prop.
+  sort()->min_prop
+
+predictors <- setdiff(colnames(mmr_complete),                                   c(grep("time|event",colnames(mmr_complete),value=TRUE),
+                      "randomization_assignment",
+                      "ethnicity","echo0_day","racial_category",
+                      names(min_prop)[min_prop<0.1] ## Also exclude any variables with min factor level prop less than 0.1.
+                      ) ## Variables that are not going to be used as predictors
+                    )
+
+ann.colors<-list(randomization_assignment=c('0'='blue','1'='red'))
+  
+
+```
+
+## MPBRP on the entire dataset
+
+Define formulas for MBRP: event ~ treatment|covariates
+```{r}
+set.seed(123)
+
+time_col='time_1y';
+event_col='event_1y';
+treatment='randomization_assignment';
+
+partition_vars <- paste(sort(predictors), collapse = " + ")
+## Option 2: survival model
+surv_base <- as.formula( paste0("Surv(", time_col, "," , event_col, ") ~ ", treatment) )
+
+surv_formula <- as.formula(paste(deparse(surv_base), "| (", partition_vars, ")"))
+
+## Define control parameters for the mbrp
+mmr_mob_control <- mob_control(
+  mtry=1000,
+  minsize =  25,
+  minbucket = 25,
+  bonferroni = FALSE,
+  maxdepth=5,
+  nrep = 10000,
+  alpha = 0.1,
+  catsplit = "binary",
+  numsplit = "center",
+  ordinal='L2',
+  restart=FALSE,
+  vcov='sandwich',
+  trim=0.1
+)
+
+mob_tree_entire <- partykit::mob(
+  formula = surv_formula,
+  data = mmr_complete,
+  fit = cox_fit,
+  control = mmr_mob_control
+)
+
+plot(mob_tree_entire)
+```
+
+
+```{r}
+
+cat("\n")
+
+#pdf("results/mob_tree_full.pdf", width = 14, height = 10)
+#plot(mob_tree_entire)
+#dev.off()
+mmr_complete <- mmr_complete %>%  mutate(cluster = as.factor(predict(mob_tree_entire)))
+P<-cox_interaction(time_col=time_col, event_col=event_col,treatment=treatment, 
+                   group_col='cluster',data = mmr_complete)
+print(P)
+  
+```
+
+
+
+```{r}
+save(file='today.rda',list=ls())
+```
+
+

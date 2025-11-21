@@ -206,6 +206,17 @@ str(s1)
   b. Some key components of this `survfit` object that will be used to create survival curves:
     - `time`: the timepoints at which the curve has a step (i.e. at least one event occurred).
     - `surv`: the estimate of survival (i.e. survival probability) at the corresponding `time`. 
+```{r}
+summary(s1)
+
+## time: time points where events (deaths) occurred.
+## n.risk: number of individuals still at risk just before this time point. 
+## n.event: number of events at this time point. 
+## surv: Kaplan-Meier estimate of survival probability at this time. 
+## std.err: standard error of the survival estimate. 
+## lower/upper: confidence interval for survival probability. 
+## strata: group (treatment) if you fitted multiple groups. 
+```
 
 
 ### Kaplan-Meier Plots
